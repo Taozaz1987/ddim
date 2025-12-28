@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 from PIL import Image
 
-from datasets import load_lama_celebahq, load_imagenet
+from datasets import load_lama_celebahq, load_imagenet, load_seismic
 from datasets.utils import normalize
 from guided_diffusion import (
     DDIMSampler,
@@ -83,18 +83,25 @@ def prepare_classifier(conf, device):
 
 
 def prepare_data(
-    dataset_name, mask_type="half", dataset_starting_index=-1, dataset_ending_index=-1
+    dataset_name,
+    mask_type="half",
+    dataset_starting_index=-1,
+    dataset_ending_index=-1,
+    image_size=None,
 ):
+    shape = (image_size, image_size) if image_size is not None else None
     if dataset_name == "celebahq":
-        datas = load_lama_celebahq(mask_type=mask_type)
+        datas = load_lama_celebahq(mask_type=mask_type, shape=shape or (256, 256))
     elif dataset_name == "imagenet":
-        datas = load_imagenet(mask_type=mask_type)
+        datas = load_imagenet(mask_type=mask_type, shape=shape or (256, 256))
     elif dataset_name == "imagenet64":
         datas = load_imagenet(mask_type=mask_type, shape=(64, 64))
     elif dataset_name == "imagenet128":
         datas = load_imagenet(mask_type=mask_type, shape=(128, 128))
     elif dataset_name == "imagenet512":
         datas = load_imagenet(mask_type=mask_type, shape=(512, 512))
+    elif dataset_name == "seismic":
+        datas = load_seismic(mask_type=mask_type, shape=shape)
     else:
         raise NotImplementedError
 
@@ -143,6 +150,7 @@ def main():
             config.mask_type,
             config.dataset_starting_index,
             config.dataset_ending_index,
+            config.image_size,
         )
     else:
         # NOTE: the model should accepet this input image size
@@ -210,7 +218,8 @@ def main():
                 classes = torch.full((batch_size,), class_id, device=device)
                 model_kwargs["y"] = classes
 
-        shape = (batch_size, 3, config.image_size, config.image_size)
+        _, channels, height, width = batch["image"].shape
+        shape = (batch_size, channels, height, width)
 
         all_metric_paths = [
             os.path.join(outpath, i + ".last")

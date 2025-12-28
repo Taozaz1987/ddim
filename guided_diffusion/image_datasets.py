@@ -17,6 +17,8 @@ def load_data(
     deterministic=False,
     random_crop=False,
     random_flip=True,
+    channels=3,
+    grayscale=False,
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -35,6 +37,8 @@ def load_data(
     :param deterministic: if True, yield results in a deterministic order.
     :param random_crop: if True, randomly crop the images for augmentation.
     :param random_flip: if True, randomly flip the images for augmentation.
+    :param channels: number of channels to return (use 1 for grayscale).
+    :param grayscale: explicitly treat images as grayscale.
     """
     if not data_dir:
         raise ValueError("unspecified data directory")
@@ -54,6 +58,8 @@ def load_data(
         num_shards=MPI.COMM_WORLD.Get_size(),
         random_crop=random_crop,
         random_flip=random_flip,
+        channels=channels,
+        grayscale=grayscale,
     )
     if deterministic:
         loader = DataLoader(
@@ -89,6 +95,8 @@ class ImageDataset(Dataset):
         num_shards=1,
         random_crop=False,
         random_flip=True,
+        channels=3,
+        grayscale=False,
     ):
         super().__init__()
         self.resolution = resolution
@@ -96,31 +104,50 @@ class ImageDataset(Dataset):
         self.local_classes = None if classes is None else classes[shard:][::num_shards]
         self.random_crop = random_crop
         self.random_flip = random_flip
+        self.channels = channels
+        self.grayscale = grayscale or channels == 1
 
     def __len__(self):
         return len(self.local_images)
 
     def __getitem__(self, idx):
         path = self.local_images[idx]
-        with bf.BlobFile(path, "rb") as f:
-            pil_image = Image.open(f)
-            pil_image.load()
-        pil_image = pil_image.convert("RGB")
-
-        if self.random_crop:
-            arr = random_crop_arr(pil_image, self.resolution)
+        if isinstance(path, np.ndarray):
+            arr = path
         else:
-            arr = center_crop_arr(pil_image, self.resolution)
+            with bf.BlobFile(path, "rb") as f:
+                pil_image = Image.open(f)
+                pil_image.load()
+            pil_image = pil_image.convert("L" if self.grayscale else "RGB")
 
-        if self.random_flip and random.random() < 0.5:
-            arr = arr[:, ::-1]
+            if self.random_crop:
+                arr = random_crop_arr(pil_image, self.resolution)
+            else:
+                arr = center_crop_arr(pil_image, self.resolution)
 
-        arr = arr.astype(np.float32) / 127.5 - 1
+            if self.random_flip and random.random() < 0.5:
+                arr = arr[:, ::-1]
+
+        arr = arr.astype(np.float32)
+        if arr.max() > 1.0 or arr.min() < -1.0:
+            arr = arr / 127.5 - 1
+        elif arr.max() <= 1.0 and arr.min() >= 0.0:
+            arr = arr * 2 - 1
+
+        if arr.ndim == 2:
+            arr = arr[None, ...]
+        elif arr.ndim == 3:
+            if arr.shape[0] in (1, self.channels) and arr.shape[1] != self.channels and arr.shape[2] != self.channels:
+                pass
+            else:
+                arr = arr.transpose(2, 0, 1)
+        if self.channels == 1 and arr.shape[0] != 1:
+            arr = arr[:1]
 
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
-        return np.transpose(arr, [2, 0, 1]), out_dict
+        return arr, out_dict
 
 
 def center_crop_arr(pil_image, image_size):

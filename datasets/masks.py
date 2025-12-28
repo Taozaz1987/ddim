@@ -68,6 +68,13 @@ def generate_full_mask(shape):
     return ret
 
 
+def generate_ones_mask(shape):
+    assert len(shape) == 2
+    ret = torch.ones(shape, dtype=torch.float32)
+    ret = ret.unsqueeze(0).unsqueeze(0)
+    return ret
+
+
 def generate_text_mask(shape, text_type):
     if text_type == "lorem":
         mask_path = "datasets/text_masks/lorem3.npy"
@@ -101,4 +108,5 @@ mask_generators = {
     "random": generate_random_mask,
     "text_cat": partial(generate_text_mask, text_type="cat"),
     "full": generate_full_mask,
+    "ones": generate_ones_mask,
 }
