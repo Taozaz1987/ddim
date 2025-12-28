@@ -97,6 +97,8 @@ mask: ""
 ########################################################################
 classifier_path:
 cond_y:
+in_channels: 3
+out_channels: 3
 attention_resolutions: 32,16,8
 class_cond: false
 diffusion_steps: 1000

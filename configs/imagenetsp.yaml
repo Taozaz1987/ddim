@@ -98,6 +98,8 @@ mask: ""
 ### unet configs, no need to change
 ########################################################################
 cond_y: 
+in_channels: 3
+out_channels: 3
 attention_resolutions: 32,16,8
 class_cond: true
 diffusion_steps: 1000
