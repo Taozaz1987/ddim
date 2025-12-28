@@ -70,6 +70,12 @@ def prepare_model(algorithm, conf, device):
 
 def prepare_classifier(conf, device):
     logging_info("Prepare classifier...")
+    if getattr(conf, "in_channels", 3) != 3:
+        logging_info(
+            "Skip classifier creation because in_channels=%s is not supported.",
+            conf.in_channels,
+        )
+        return None
     classifier = create_classifier(
         **select_args(conf, classifier_defaults().keys()))
     classifier.load_state_dict(
@@ -129,6 +135,12 @@ def main():
     # prepare config, logger and recorder
     ###################################################################################
     config = Config(default_config_file="configs/celebahq.yaml", use_argparse=True)
+    if not hasattr(config, "in_channels"):
+        config["in_channels"] = model_defaults()["in_channels"]
+        config.in_channels = config["in_channels"]
+    if not hasattr(config, "out_channels"):
+        config["out_channels"] = model_defaults()["out_channels"]
+        config.out_channels = config["out_channels"]
     config.show()
 
     all_paths = get_all_paths(config.outdir)
@@ -154,10 +166,25 @@ def main():
         )
     else:
         # NOTE: the model should accepet this input image size
-        image = normalize(Image.open(config.input_image).convert("RGB"))
+        target_shape = (
+            (config.image_size, config.image_size)
+            if config.image_size is not None
+            else None
+        )
+        image = normalize(
+            Image.open(config.input_image).convert(
+                "L" if config.in_channels == 1 else "RGB"
+            ),
+            shape=target_shape,
+            channels=config.in_channels,
+            grayscale=config.in_channels == 1,
+        )
         if config.mode != "super_resolution":
+            mask_image = Image.open(config.mask).convert("1")
+            if target_shape is not None:
+                mask_image = mask_image.resize(target_shape)
             mask = (
-                torch.from_numpy(np.array(Image.open(config.mask).convert("1"), dtype=np.float32))
+                torch.from_numpy(np.array(mask_image, dtype=np.float32))
                 .unsqueeze(0)
                 .unsqueeze(0)
             )
@@ -205,7 +232,25 @@ def main():
         grid_count = max(len(os.listdir(outpath)) - 3, 0)
 
         # prepare batch data for processing
-        batch = {"image": image.to(device), "mask": mask.to(device)}
+        batch_image = image.to(device)
+        batch_mask = mask.to(device)
+        if batch_mask.dim() < 4:
+            batch_mask = torch.ones(
+                (batch_image.shape[0], 1, batch_image.shape[2],
+                 batch_image.shape[3]),
+                device=device,
+                dtype=batch_image.dtype,
+            )
+        if batch_image.shape[1] != config.in_channels:
+            if batch_image.shape[1] == 1:
+                batch_image = batch_image.repeat(1, config.in_channels, 1, 1)
+            else:
+                batch_image = batch_image[:, : config.in_channels]
+        if batch_mask.dim() == 3:
+            batch_mask = batch_mask.unsqueeze(0)
+        if batch_mask.shape[1] != config.in_channels:
+            batch_mask = batch_mask.repeat(1, config.in_channels, 1, 1)
+        batch = {"image": batch_image, "mask": batch_mask}
         model_kwargs = {
             "gt": batch["image"].repeat(batch_size, 1, 1, 1),
             "gt_keep_mask": batch["mask"].repeat(batch_size, 1, 1, 1),
@@ -218,8 +263,8 @@ def main():
                 classes = torch.full((batch_size,), class_id, device=device)
                 model_kwargs["y"] = classes
 
-        _, channels, height, width = batch["image"].shape
-        shape = (batch_size, channels, height, width)
+        _, _, height, width = batch["image"].shape
+        shape = (batch_size, config.in_channels, height, width)
 
         all_metric_paths = [
             os.path.join(outpath, i + ".last")

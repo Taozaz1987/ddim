@@ -1,29 +1,20 @@
 ########################################################################
-# Usage:
-# All parameters could be specified by argparse, e.g. simply run the python script with ``--model_path xxx'' will change
-# ``model_path'' parameter during running. Nested params ``--ddim.schedule_params.ddpm_num_steps xxx'' is also supported.
-########################################################################
-
-
-########################################################################
 ##  basic configs
 ########################################################################
-model_path: ./checkpoints/512x512_diffusion.pt
-classifier_path: ./checkpoints/512x512_classifier.pt
-dataset_name: imagenet
+model_path: ./checkpoints/seismic.pt
+dataset_name: seismic
 dataset_starting_index: -1 # specify the starting index, -1 means 0
 dataset_ending_index: -1 # specify the ending index, -1 means len(dataset)
-mask_type: half
+mask_type: ones
 seed: 42
 use_git: false
 n_samples: 10
 n_iter: 1
-outdir: ./images/imagenet
-algorithm: ddim
+outdir: ./images/seismic
+algorithm: o_ddim
 resume: false # will load previous results if there are some
 mode: inpaint
 debug: false
-
 
 ########################################################################
 ## algorithm specific configs
@@ -31,7 +22,7 @@ debug: false
 ddim:
   ddim_sigma: 0.0
   schedule_params:
-    num_inference_steps: 100
+    num_inference_steps: 250
     ddpm_num_steps: 250
     schedule_type: linear
     jump_length: 1
@@ -44,15 +35,15 @@ resample:
 
 optimize_xt:
   optimize_xt: true
-  num_iteration_optimize_xt: 5
-  lr_xt: 0.0025
-  lr_xt_decay: 1.05
-  use_smart_lr_xt_decay: false
+  num_iteration_optimize_xt: 2
+  lr_xt: 0.02
+  lr_xt_decay: 1.012
+  use_smart_lr_xt_decay: true
   use_adaptive_lr_xt: true
-  coef_xt_reg: 0.01
-  coef_xt_reg_decay: 1.0
+  coef_xt_reg: 0.0001
+  coef_xt_reg_decay: 1.01
   mid_interval_num: 1
-  optimize_before_time_travel: false
+  optimize_before_time_travel: true
   filter_xT: false
 
 repaint:
@@ -79,7 +70,7 @@ ddrm:
     jump_n_sample: 1
 
 dps:
-  step_size: 0.5
+  step_size: 1.0
   eta: 1.0
   schedule_jump_params:
     t_T: 250
@@ -88,13 +79,20 @@ dps:
     jump_n_sample: 1
 
 ########################################################################
+## single image inference
+########################################################################
+input_image: ""
+mask: ""
+
+########################################################################
 ### unet configs, no need to change
 ########################################################################
+classifier_path:
 cond_y:
-in_channels: 3
-out_channels: 3
+in_channels: 1
+out_channels: 1
 attention_resolutions: 32,16,8
-class_cond: true
+class_cond: false
 diffusion_steps: 1000
 learn_sigma: true
 noise_schedule: linear
@@ -103,9 +101,9 @@ num_head_channels: 64
 num_heads: 4
 num_res_blocks: 2
 resblock_updown: true
-use_fp16: true
+use_fp16: false
 use_scale_shift_norm: true
-classifier_scale: 1.0
+classifier_scale: 4.0
 lr_kernel_n_std: 2
 num_samples: 100
 show_progress: true
@@ -128,4 +126,4 @@ use_checkpoint: false
 use_new_attention_order: false
 clip_denoised: true
 use_ddim: false
-image_size: 512
+image_size: 128
