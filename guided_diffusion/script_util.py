@@ -67,6 +67,13 @@ def model_and_diffusion_defaults():
     return res
 
 
+def model_defaults():
+    """
+    Defaults for the UNet model.
+    """
+    return model_and_diffusion_defaults()
+
+
 def classifier_and_diffusion_defaults():
     res = classifier_defaults()
     res.update(diffusion_defaults())
@@ -402,6 +409,8 @@ def create_gaussian_diffusion(
     rescale_timesteps=False,
     rescale_learned_sigmas=False,
     timestep_respacing="",
+    base_cls=SpacedDiffusion,
+    conf=None,
 ):
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:
@@ -412,7 +421,7 @@ def create_gaussian_diffusion(
         loss_type = gd.LossType.MSE
     if not timestep_respacing:
         timestep_respacing = [steps]
-    return SpacedDiffusion(
+    return base_cls(
         use_timesteps=space_timesteps(steps, timestep_respacing),
         betas=betas,
         model_mean_type=(
@@ -429,6 +438,7 @@ def create_gaussian_diffusion(
         ),
         loss_type=loss_type,
         rescale_timesteps=rescale_timesteps,
+        conf=conf,
     )
 
 
@@ -444,6 +454,16 @@ def add_dict_to_argparser(parser, default_dict):
 
 def args_to_dict(args, keys):
     return {k: getattr(args, k) for k in keys}
+
+
+def select_args(conf, keys):
+    """
+    Select a subset of attributes from a Config-like object.
+
+    This converts the selected values into a plain dictionary suitable for
+    passing as keyword arguments to model or diffusion constructors.
+    """
+    return {k: getattr(conf, k) for k in keys if hasattr(conf, k)}
 
 
 def str2bool(v):

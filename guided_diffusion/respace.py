@@ -69,10 +69,11 @@ class SpacedDiffusion(GaussianDiffusion):
     :param kwargs: the kwargs to create the base diffusion process.
     """
 
-    def __init__(self, use_timesteps, **kwargs):
+    def __init__(self, use_timesteps, conf=None, **kwargs):
         self.use_timesteps = set(use_timesteps)
         self.timestep_map = []
         self.original_num_steps = len(kwargs["betas"])
+        self.conf = conf
 
         base_diffusion = GaussianDiffusion(**kwargs)  # pylint: disable=missing-kwoa
         last_alpha_cumprod = 1.0
