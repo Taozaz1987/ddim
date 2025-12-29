@@ -10,6 +10,7 @@ End-to-end workflow:
    python main.py --config_file configs/seismic.yaml
 """
 
+import argparse
 import numpy as np
 import scipy.io as sio
 import os
@@ -105,22 +106,21 @@ def slice_seismic_data(
 # ================= 使用示例 =================
 # 请修改下面的路径
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Slice seismic sections into patches.")
+    parser.add_argument("--mat_path", type=str, default="matdata.mat")
+    parser.add_argument("--save_dir", type=str, default="qiepian")
+    parser.add_argument("--patch_size", type=int, default=128)
+    parser.add_argument("--stride", type=int, default=64)
+    parser.add_argument("--mat_key", type=str, default="input")
+    args = parser.parse_args()
 
-    # 1. 定义你的真实文件路径
-    REAL_DATA_PATH = "matdata.mat"  # 你的真实 .mat 文件路径
-    OUTPUT_DIR = "qiepian"          # 你的输出路径
-    REAL_KEY = "input"                                        # 你的变量名 (根据你之前的默认参数推测是 'input')
+    if not os.path.exists(args.mat_path):
+        raise FileNotFoundError(f"Could not find seismic file at {args.mat_path}")
 
-    # 2. 检查文件是否存在，防止路径写错
-    if not os.path.exists(REAL_DATA_PATH):
-        print(f"错误: 找不到文件 {REAL_DATA_PATH}")
-        print("请检查路径是否正确！")
-    else:
-        # 3. 调用切分函数
-        slice_seismic_data(
-            mat_path=REAL_DATA_PATH,
-            save_dir=OUTPUT_DIR,
-            patch_size=128,
-            stride=64,
-            mat_key=REAL_KEY
-        )
+    slice_seismic_data(
+        mat_path=args.mat_path,
+        save_dir=args.save_dir,
+        patch_size=args.patch_size,
+        stride=args.stride,
+        mat_key=args.mat_key,
+    )

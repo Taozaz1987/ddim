@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 from PIL import Image
 
-from datasets import load_lama_celebahq, load_imagenet, load_seismic, load_seismic_from_mat
+from datasets import load_seismic, load_seismic_from_mat
 from datasets.utils import normalize
 from guided_diffusion import (
     DDIMSampler,
@@ -25,8 +25,6 @@ from guided_diffusion.script_util import (
     diffusion_defaults,
     create_gaussian_diffusion,
     select_args,
-    create_classifier,
-    classifier_defaults,
 )
 from metrics import LPIPS, PSNR, SSIM, Metric
 from utils import save_grid, save_image, normalize_image
@@ -72,28 +70,7 @@ def prepare_model(algorithm, conf, device):
     return unet, sampler
 
 
-def prepare_classifier(conf, device):
-    logging_info("Prepare classifier...")
-    if getattr(conf, "in_channels", 3) != 3:
-        logging_info(
-            "Skip classifier creation because in_channels=%s is not supported.",
-            conf.in_channels,
-        )
-        return None
-    classifier = create_classifier(
-        **select_args(conf, classifier_defaults().keys()))
-    classifier.load_state_dict(
-        dist_util.load_state_dict(
-            os.path.expanduser(conf.classifier_path), map_location="cpu"
-        )
-    )
-    classifier.to(device)
-    classifier.eval()
-    return classifier
-
-
 def prepare_data(
-    dataset_name,
     mask_type="half",
     dataset_starting_index=-1,
     dataset_ending_index=-1,
@@ -105,36 +82,23 @@ def prepare_data(
     mat_stride=None,
 ):
     shape = (image_size, image_size) if image_size is not None else None
-    if dataset_name == "celebahq":
-        datas = load_lama_celebahq(mask_type=mask_type, shape=shape or (256, 256))
-    elif dataset_name == "imagenet":
-        datas = load_imagenet(mask_type=mask_type, shape=shape or (256, 256))
-    elif dataset_name == "imagenet64":
-        datas = load_imagenet(mask_type=mask_type, shape=(64, 64))
-    elif dataset_name == "imagenet128":
-        datas = load_imagenet(mask_type=mask_type, shape=(128, 128))
-    elif dataset_name == "imagenet512":
-        datas = load_imagenet(mask_type=mask_type, shape=(512, 512))
-    elif dataset_name == "seismic":
-        if mat_path:
-            datas = load_seismic_from_mat(
-                mat_path=mat_path,
-                mat_key=mat_key or "input",
-                mask_type=mask_type,
-                mask_params=mask_params,
-                patch_size=image_size,
-                stride=mat_stride,
-            )
-        else:
-            datas = load_seismic(
-                data_path=data_path or "qiepian/marmousi_patches.npy",
-                mask_type=mask_type,
-                shape=shape,
-                mask_params=mask_params,
-                include_unmasked=True,
-            )
+    if mat_path:
+        datas = load_seismic_from_mat(
+            mat_path=mat_path,
+            mat_key=mat_key or "input",
+            mask_type=mask_type,
+            mask_params=mask_params,
+            patch_size=image_size,
+            stride=mat_stride,
+        )
     else:
-        raise NotImplementedError
+        datas = load_seismic(
+            data_path=data_path or "qiepian/marmousi_patches.npy",
+            mask_type=mask_type,
+            shape=shape,
+            mask_params=mask_params,
+            include_unmasked=True,
+        )
 
     dataset_starting_index = (
         0 if dataset_starting_index == -1 else dataset_starting_index
@@ -168,7 +132,7 @@ def main():
         "mat_stride": 64,
     }
     config = Config(
-        default_config_file="configs/celebahq.yaml",
+        default_config_file="configs/seismic.yaml",
         default_config_dict=base_defaults,
         use_argparse=True,
     )
@@ -203,7 +167,6 @@ def main():
 
     if config.input_image == "":  # if input image is not given, load dataset
         datas = prepare_data(
-            config.dataset_name,
             config.mask_type,
             config.dataset_starting_index,
             config.dataset_ending_index,
@@ -252,7 +215,7 @@ def main():
         forward_params = inspect.signature(unet.forward).parameters
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in forward_params}
         if "y" in forward_params:
-            filtered_kwargs["y"] = y if config.class_cond else None
+            filtered_kwargs["y"] = y
         return unet(x, t, **filtered_kwargs)
     
     cond_fn = None
@@ -272,12 +235,7 @@ def main():
     batch_size = config.n_samples
 
     for data in tqdm(datas):
-        if config.class_cond:
-            image, mask, image_name, class_id = data[:4]
-            extra_items = data[4:]
-        else:
-            image, mask, image_name, *extra_items = data
-            class_id = None
+        image, mask, image_name, *extra_items = data
         original_image = extra_items[0] if len(extra_items) > 0 else image
         # prepare save dir
         outpath = os.path.join(config.outdir, image_name)
@@ -307,9 +265,7 @@ def main():
         if batch_mask.shape[1] != config.in_channels:
             batch_mask = batch_mask.repeat(1, config.in_channels, 1, 1)
         batch_image_masked = batch_image * batch_mask
-        model_gt = (
-            batch_image_masked if config.dataset_name == "seismic" else batch_image
-        )
+        model_gt = batch_image_masked
         batch = {
             "image": batch_image,
             "mask": batch_mask,
@@ -319,13 +275,6 @@ def main():
             "gt": model_gt.repeat(batch_size, 1, 1, 1),
             "gt_keep_mask": batch["mask"].repeat(batch_size, 1, 1, 1),
         }
-        if config.class_cond:
-            if config.cond_y is not None:
-                classes = torch.ones(batch_size, dtype=torch.long, device=device)
-                model_kwargs["y"] = classes * config.cond_y
-            elif config.classifier_path is not None:
-                classes = torch.full((batch_size,), class_id, device=device)
-                model_kwargs["y"] = classes
 
         _, _, height, width = batch["image"].shape
         shape = (batch_size, config.in_channels, height, width)
