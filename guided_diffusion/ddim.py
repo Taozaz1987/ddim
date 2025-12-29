@@ -39,9 +39,29 @@ class DDIMSampler(SpacedDiffusion):
         B, C = x.shape[:2]
         assert t.shape == (B,)
         model_output = model_fn(x, self._scale_timesteps(t), **model_kwargs)
-        assert model_output.shape == (B, C * 2, *x.shape[2:])
-        model_output, _ = torch.split(model_output, C, dim=1)
-        return model_output
+        expected_spatial = x.shape[2:]
+
+        if model_output.shape[:1] != (B,):
+            raise ValueError(
+                f"Model output batch dimension {model_output.shape[0]} does not match input batch {B}."
+            )
+        if model_output.shape[2:] != expected_spatial:
+            raise ValueError(
+                f"Model output spatial shape {model_output.shape[2:]} "
+                f"does not match input shape {expected_spatial}."
+            )
+
+        channels = model_output.shape[1]
+        if channels == C:
+            return model_output
+        if channels == C * 2:
+            model_output, _ = torch.split(model_output, C, dim=1)
+            return model_output
+
+        raise ValueError(
+            f"Unexpected model output shape {tuple(model_output.shape)}; expected channel dimension "
+            f"of {C} (learn_sigma=False) or {C * 2} (learn_sigma=True)."
+        )
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
         return (

@@ -1,108 +1,68 @@
-# Towards Coherent Image Inpainting Using Denoising Diffusion Implicit Models
+# Seismic Trace Reconstruction with DDIM
 
-This is the official impelmenation of the paper [Towards Coherent Image Inpainting Using Denoising Diffusion Implicit Models](https://arxiv.org/pdf/2304.03322.pdf).
+This repository provides a seismic-only workflow for reconstructing missing traces with diffusion models. The image-focused configs and datasets have been removed to reduce confusion—the remaining pipeline slices seismic sections into patches, trains a diffusion model on them, and reconstructs traces with DDIM-based samplers.
 
-## Abstract
-Image inpainting refers to the task of generating a complete, natural image based on a partially revealed reference image. Recently, many research interests have been focused on addressing this problem using fixed diffusion models. These approaches typically directly replace the revealed region of the intermediate or final generated images with that of the reference image or its variants.  However, since the unrevealed regions are not directly modified to match the context, it results in incoherence between revealed and unrevealed regions. To address the incoherence problem, a small number of methods introduce a rigorous Bayesian framework, but they tend to introduce mismatches between the generated and the reference images due to the approximation errors in computing the posterior distributions. In this paper, we propose COPAINT, which can coherently inpaint the whole image without introducing mismatches. COPAINT also uses the Bayesian framework to jointly modify both revealed and unrevealed regions, but approximates the posterior distribution in a way that allows the errors to gradually drop to zero throughout the denoising steps, thus strongly penalizing any mismatches with the reference image. Our experiments verify that COPAINT can outperform the existing diffusion-based methods under both objective and subjective metrics.
+## Environment
+Create the conda environment and install dependencies:
 
-## Requirements
-### Environment
-Install conda environment by running
-```
+```bash
 conda env create -f environment.yaml
 conda activate copaint
 ```
-### Download pretrained models and data
-```
-bash scripts/download.sh
-```
-This script will download pretrained diffusion models from [guided-diffusion](https://github.com/openai/guided-diffusion) and [repaint](https://github.com/andreas128/RePaint).
 
-Then it will download and preprocess `CelebA-HQ` dataset according to the data split in [Lama](https://github.com/saic-mdal/lama). The images we used for `ImageNet` dataset should be placed in `datasets/imagenet100`, which could be downloaded [here](https://drive.google.com/drive/folders/1CTBHK8udyGejJEob-HTL1MrmtkqC_3gr?usp=sharing).
+## Data preparation
+Use the helper script to slice seismic sections into normalized patches:
 
-## Usage
-### Inpainting with `CoPaint`
-To inpaint a specific image with our algorithm `CoPaint`, you can run 
-```text
-python main.py:
-    --config_file: The configuration file, which specifies the model to use and some hyper-parameters for our method
-    --input_image: The path to input image
-    --mask:        The path to mask file 
-    --outdir:      The path to output folder
-    --n_samples:   The number of images to be generated
-    --algorithm:   The algorithm to be used
-```
-Here is an example result on `CelebA-HQ` dataset with `CoPaint`:
-```shell
-python main.py --config_file configs/celebahq.yaml --input_image examples/celeb-sample.jpg --mask examples/celeb-mask.jpg --outdir images/example --n_samples 1 --algorithm o_ddim 
-```
-Here is an example result on `CelebA-HQ` dataset with `CoPaint-TT`:
-```shell
-python main.py --config_file configs/celebahq.yaml --input_image examples/celeb-sample.jpg --mask examples/celeb-mask.jpg --outdir images/example --n_samples 1 --algorithm o_ddim --ddim.schedule_params.jump_length 10 --ddim.schedule_params.jump_n_sample 2 --ddim.schedule_params.use_timetravel
+```bash
+python prepare_data.py \
+  --mat_path matdata.mat \
+  --save_dir qiepian \
+  --patch_size 128 \
+  --stride 64 \
+  --mat_key input
 ```
 
-<img src="assets/sample.png" width=400px>
+This produces `qiepian/marmousi_patches.npy`, which is the default training and sampling input. You can also run reconstruction directly from a `.mat` file without pre-saving to `.npy` (see inference below).
 
-### Tip:
-You can tune following hyper-parameters if you are not satisfied with the generated image:
-* `--optimize_xt.num_iteration_optimize_xt`: The number of optimization steps $G$.
-* `--optimize_xt.lr_xt`: The initial learning rate $\mu_T$
-Below are hyper-paremters for the time-travel trick:
-* `--ddim.schedule_params.use_timetravel`: Whether to use time-travel trick.
-* `--ddim.schedule_parms.jump_length` : The time-travel interval $\tau$.
-* `--ddim.schedule_parms.jum_n_sample` : The time-travel frequency $K$.
+## Training
+Train the diffusion model on the generated patches (defaults assume single-channel seismic data):
 
-Please refer to our paper for more details.
-
-## Reproduce results in our paper
-We provide shell scripts for all algorithms discussed in our paper, `copaint, repaint, copaint-tt`, you can find them in `scripts` folder. To run a specific algorithm on both datasets:
-```shell
-bash scripts/{algorithm}.sh
-```
-The generated images will be put in `images/{algorithm}`.
-
-Below is an example to run `Copaint` on `CelebA-HQ` dataset with `half` mask:
-```shell
-python main.py --dataset_name celebahq --algorithm o_ddim --outdir celebresults --mask_type half --config_file configs/celebahq.yaml
+```bash
+python scripts/image_train.py \
+  --data_path qiepian/marmousi_patches.npy \
+  --image_size 128 \
+  --batch_size 8 \
+  --max_steps 0 \
+  --progress_bar
 ```
 
-### Seismic reconstruction workflow
-We provide defaults for the included `matdata.mat` seismic section so you can train and sample without manual path overrides:
+The training script wraps the seismic patches in a PyTorch `Dataset` and uses the guided-diffusion training loop. Checkpoints are written under `checkpoints/`.
 
-1. Slice patches (defaults read `./matdata.mat` and save to `./qiepian/marmousi_patches.npy`):
-   ```shell
-   python prepare_data.py
-   ```
-2. Train the seismic model on the generated patches:
-   ```shell
-   python scripts/image_train.py --data_path qiepian/marmousi_patches.npy --image_size 128
-   ```
-3. Reconstruct missing traces using the trace-dropout mask in `configs/seismic.yaml`:
-   ```shell
-   python main.py --config_file configs/seismic.yaml --outdir images/seismic
-   ```
+## Inference
+Run seismic reconstruction with DDIM samplers using the seismic config as a default:
 
-You can also run reconstruction directly from a `.mat` file without pre-slicing to `.npy`:
-```shell
-python main.py --config_file configs/seismic.yaml --mat_path matdata.mat --mat_key input --outdir images/seismic_mat
-```
-The seismic defaults drop traces column-wise (`mask_type: trace_dropout`); adjust `--mask_drop_rate` or `--mask_drop_indices` to control which columns are missing, and use `--mat_stride` to change patch overlap when slicing sections.
-
-## References
-If you find our work useful for your research, please consider citing our paper:
-```bibtex
-@misc{zhang2023coherent,
-      title={Towards Coherent Image Inpainting Using Denoising Diffusion Implicit Models},
-      author={Guanhua Zhang and Jiabao Ji and Yang Zhang and Mo Yu and Tommi Jaakkola and Shiyu Chang},
-      year={2023},
-      eprint={2304.03322},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
+```bash
+python main.py \
+  --config_file configs/seismic.yaml \
+  --outdir images/seismic_run \
+  --n_samples 4 \
+  --n_iter 1
 ```
 
-Our implementation is based on following repos:
-* https://github.com/andreas128/RePaint
-* https://github.com/bahjat-kawar/ddrm
-* https://github.com/wyhuai/DDNM
-* https://github.com/DPS2022/diffusion-posterior-sampling
+Key CLI flags (all populated from `configs/seismic.yaml` by default):
+
+- `--data_path`: Path to the `.npy` patches (used when `--mat_path` is empty).
+- `--mat_path`: Optional `.mat`/`.npy` section to slice on the fly instead of pre-generated patches.
+- `--mat_key`: Variable name inside the `.mat` file (default: `input`).
+- `--mat_stride`: Stride for sliding-window patching when using `--mat_path`.
+- `--mask_type`: Mask generator for traces (`trace_dropout` by default).
+- `--mask_drop_rate` / `--mask_drop_indices`: Control which traces are removed before reconstruction.
+
+Outputs (ground truth, masks, and reconstructed grids) are saved under `--outdir`.
+
+## Tests
+Run the unit tests and smoke checks:
+
+```bash
+pytest
+```

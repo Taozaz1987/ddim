@@ -2,7 +2,6 @@
 ##  basic configs
 ########################################################################
 model_path: ./checkpoints/seismic.pt
-dataset_name: seismic
 data_path: qiepian/marmousi_patches.npy
 dataset_starting_index: -1 # specify the starting index, -1 means 0
 dataset_ending_index: -1 # specify the ending index, -1 means len(dataset)
