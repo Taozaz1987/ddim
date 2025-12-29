@@ -248,8 +248,12 @@ def main():
     device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
     unet, sampler = prepare_model(config.algorithm, config, device)
 
-    def model_fn(x, t, y=None, gt=None, **kwargs):
-        return unet(x, t, y if config.class_cond else None, gt=gt)
+    def model_fn(x, t, y=None, **kwargs):
+        forward_params = inspect.signature(unet.forward).parameters
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in forward_params}
+        if "y" in forward_params:
+            filtered_kwargs["y"] = y if config.class_cond else None
+        return unet(x, t, **filtered_kwargs)
     
     cond_fn = None
 
