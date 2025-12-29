@@ -86,6 +86,8 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        max_steps=args.max_steps,
+        target_loss=args.target_loss,
     ).run_loop(progress=args.progress_bar)
 
 
@@ -105,6 +107,8 @@ def create_argparser():
         use_fp16=False,
         fp16_scale_growth=1e-3,
         progress_bar=False,
+        max_steps=0,
+        target_loss=0.0,
     )
     defaults.update(model_and_diffusion_defaults())
     defaults["in_channels"] = 1
