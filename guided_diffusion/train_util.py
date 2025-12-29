@@ -40,6 +40,8 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        max_steps=0,
+        target_loss=None,
     ):
         self.model = model
         self.diffusion = diffusion
@@ -60,6 +62,9 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+        self.max_steps = max_steps
+        self.target_loss = target_loss
+        self.best_loss = None
 
         self.step = 0
         self.resume_step = 0
@@ -155,12 +160,9 @@ class TrainLoop:
     def run_loop(self, progress=False):
         progress_enabled = progress and dist.get_rank() == 0
         with self._progress_bar(progress_enabled) as pbar:
-            while (
-                not self.lr_anneal_steps
-                or self.step + self.resume_step < self.lr_anneal_steps
-            ):
+            while self._should_continue_training():
                 batch, cond = next(self.data)
-                self.run_step(batch, cond)
+                loss_value = self.run_step(batch, cond)
                 if pbar:
                     self._update_progress_bar(pbar)
                 if self.step % self.log_interval == 0:
@@ -175,6 +177,16 @@ class TrainLoop:
                         and self.step > 0
                     ):
                         return
+                if self._should_stop_for_loss(loss_value):
+                    logger.log(
+                        f"target loss {self.target_loss} reached; stopping training."
+                    )
+                    break
+                if self._reached_max_steps():
+                    logger.log(
+                        f"maximum training steps {self.max_steps} reached; stopping training."
+                    )
+                    break
                 self.step += 1
             # Save the last checkpoint if it wasn't already saved.
             if (self.step - 1) % self.save_interval != 0:
@@ -189,6 +201,7 @@ class TrainLoop:
             self._update_ema()
         self._anneal_lr()
         self.log_step()
+        return self.best_loss
 
     def forward_backward(self, batch, cond):
         self.mp_trainer.zero_grad()
@@ -225,6 +238,9 @@ class TrainLoop:
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
             self.mp_trainer.backward(loss)
+            loss_value = loss.detach().item()
+            if self.best_loss is None or loss_value < self.best_loss:
+                self.best_loss = loss_value
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
@@ -253,7 +269,7 @@ class TrainLoop:
         if not enabled:
             return nullcontext()
 
-        total_steps = self.lr_anneal_steps if self.lr_anneal_steps else None
+        total_steps = self._progress_total()
         pbar = tqdm(
             total=total_steps,
             initial=self.resume_step,
@@ -266,6 +282,31 @@ class TrainLoop:
     def _update_progress_bar(self, pbar):
         pbar.update(1)
         self._refresh_progress_postfix(pbar)
+
+    def _progress_total(self):
+        candidates = [
+            value
+            for value in (self.lr_anneal_steps, self.max_steps)
+            if value and value > 0
+        ]
+        return min(candidates) if candidates else None
+
+    def _should_continue_training(self):
+        if self.lr_anneal_steps and (self.step + self.resume_step) >= self.lr_anneal_steps:
+            return False
+        if self.max_steps and self._reached_max_steps():
+            return False
+        return True
+
+    def _should_stop_for_loss(self, loss_value):
+        if loss_value is None:
+            return False
+        if self.target_loss is None or self.target_loss <= 0:
+            return False
+        return loss_value <= self.target_loss
+
+    def _reached_max_steps(self):
+        return self.max_steps and (self.step + self.resume_step) >= self.max_steps
 
     def _refresh_progress_postfix(self, pbar):
         samples = (self.step + self.resume_step + 1) * self.global_batch
