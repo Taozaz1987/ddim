@@ -401,6 +401,7 @@ def sr_create_model(
 def create_gaussian_diffusion(
     *,
     steps=1000,
+    diffusion_steps=None,
     learn_sigma=False,
     sigma_small=False,
     noise_schedule="linear",
@@ -412,6 +413,13 @@ def create_gaussian_diffusion(
     base_cls=SpacedDiffusion,
     conf=None,
 ):
+    if diffusion_steps is not None:
+        if steps != 1000 and steps != diffusion_steps:
+            raise ValueError(
+                f"Conflicting diffusion step counts: steps={steps}, diffusion_steps={diffusion_steps}"
+            )
+        steps = diffusion_steps
+
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:
         loss_type = gd.LossType.RESCALED_KL
