@@ -1,18 +1,30 @@
+"""
+Seismic preprocessing helper.
+
+End-to-end workflow:
+1. Run this script to slice patches from matdata.mat:
+   python prepare_data.py
+2. Train the diffusion model on the generated patches:
+   python scripts/image_train.py --data_path qiepian/marmousi_patches.npy
+3. Sample reconstructions with the seismic config:
+   python main.py --config_file configs/seismic.yaml
+"""
+
 import numpy as np
 import scipy.io as sio
 import os
 import matplotlib.pyplot as plt
 
 def slice_seismic_data(
-    mat_path="/data/ddim/CoPaint-master/matdata.mat", 
-    save_dir="/data/ddim/CoPaint-master/qiepian", 
-    patch_size=128, 
-    stride=64, 
+    mat_path="matdata.mat",
+    save_dir="qiepian",
+    patch_size=128,
+    stride=64,
     mat_key='input'
 ):
     """
-    mat_path: .mat 文件路径
-    save_dir: 切片保存的文件夹
+    mat_path: .mat 文件路径（默认使用仓库根目录下的 matdata.mat）
+    save_dir: 切片保存的文件夹（默认在仓库内生成 qiepian/）
     patch_size: 切片大小 (128x128 通常比较适合显存)
     stride: 滑动步长 (越小重叠越多，数据量越大)
     mat_key: .mat 文件中存储数据的变量名，需要你自己检查
@@ -95,8 +107,8 @@ def slice_seismic_data(
 if __name__ == "__main__":
 
     # 1. 定义你的真实文件路径
-    REAL_DATA_PATH = "/data/ddim/CoPaint-master/matdata.mat"  # 你的真实 .mat 文件路径
-    OUTPUT_DIR = "/data/ddim/CoPaint-master/qiepian"          # 你的输出路径
+    REAL_DATA_PATH = "matdata.mat"  # 你的真实 .mat 文件路径
+    OUTPUT_DIR = "qiepian"          # 你的输出路径
     REAL_KEY = "input"                                        # 你的变量名 (根据你之前的默认参数推测是 'input')
 
     # 2. 检查文件是否存在，防止路径写错

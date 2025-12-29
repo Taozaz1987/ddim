@@ -66,6 +66,28 @@ Below is an example to run `Copaint` on `CelebA-HQ` dataset with `half` mask:
 python main.py --dataset_name celebahq --algorithm o_ddim --outdir celebresults --mask_type half --config_file configs/celebahq.yaml
 ```
 
+### Seismic reconstruction workflow
+We provide defaults for the included `matdata.mat` seismic section so you can train and sample without manual path overrides:
+
+1. Slice patches (defaults read `./matdata.mat` and save to `./qiepian/marmousi_patches.npy`):
+   ```shell
+   python prepare_data.py
+   ```
+2. Train the seismic model on the generated patches:
+   ```shell
+   python scripts/image_train.py --data_path qiepian/marmousi_patches.npy --image_size 128
+   ```
+3. Reconstruct missing traces using the trace-dropout mask in `configs/seismic.yaml`:
+   ```shell
+   python main.py --config_file configs/seismic.yaml --outdir images/seismic
+   ```
+
+You can also run reconstruction directly from a `.mat` file without pre-slicing to `.npy`:
+```shell
+python main.py --config_file configs/seismic.yaml --mat_path matdata.mat --mat_key input --outdir images/seismic_mat
+```
+The seismic defaults drop traces column-wise (`mask_type: trace_dropout`); adjust `--mask_drop_rate` or `--mask_drop_indices` to control which columns are missing, and use `--mat_stride` to change patch overlap when slicing sections.
+
 ## References
 If you find our work useful for your research, please consider citing our paper:
 ```bibtex
