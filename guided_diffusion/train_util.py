@@ -1,12 +1,14 @@
 import copy
 import functools
 import os
+from contextlib import contextmanager, nullcontext
 
 import blobfile as bf
 import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
+from tqdm.auto import tqdm
 
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
@@ -150,24 +152,35 @@ class TrainLoop:
             )
             self.opt.load_state_dict(state_dict)
 
-    def run_loop(self):
-        while (
-            not self.lr_anneal_steps
-            or self.step + self.resume_step < self.lr_anneal_steps
-        ):
-            batch, cond = next(self.data)
-            self.run_step(batch, cond)
-            if self.step % self.log_interval == 0:
-                logger.dumpkvs()
-            if self.step % self.save_interval == 0:
+    def run_loop(self, progress=False):
+        progress_enabled = progress and dist.get_rank() == 0
+        with self._progress_bar(progress_enabled) as pbar:
+            while (
+                not self.lr_anneal_steps
+                or self.step + self.resume_step < self.lr_anneal_steps
+            ):
+                batch, cond = next(self.data)
+                self.run_step(batch, cond)
+                if pbar:
+                    self._update_progress_bar(pbar)
+                if self.step % self.log_interval == 0:
+                    self._dump_logs_with_progress(pbar)
+                if self.step % self.save_interval == 0:
+                    self.save()
+                    if pbar:
+                        self._refresh_progress_postfix(pbar)
+                    # Run for a finite amount of time in integration tests.
+                    if (
+                        os.environ.get("DIFFUSION_TRAINING_TEST", "")
+                        and self.step > 0
+                    ):
+                        return
+                self.step += 1
+            # Save the last checkpoint if it wasn't already saved.
+            if (self.step - 1) % self.save_interval != 0:
                 self.save()
-                # Run for a finite amount of time in integration tests.
-                if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
-                    return
-            self.step += 1
-        # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
-            self.save()
+                if pbar:
+                    self._refresh_progress_postfix(pbar)
 
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
@@ -228,6 +241,56 @@ class TrainLoop:
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
+
+    def _dump_logs_with_progress(self, pbar):
+        if pbar:
+            with self._redirect_logger_to_tqdm(pbar):
+                logger.dumpkvs()
+        else:
+            logger.dumpkvs()
+
+    def _progress_bar(self, enabled):
+        if not enabled:
+            return nullcontext()
+
+        total_steps = self.lr_anneal_steps if self.lr_anneal_steps else None
+        pbar = tqdm(
+            total=total_steps,
+            initial=self.resume_step,
+            desc="Training",
+            dynamic_ncols=True,
+            leave=True,
+        )
+        return _TqdmWithRedirect(self, pbar)
+
+    def _update_progress_bar(self, pbar):
+        pbar.update(1)
+        self._refresh_progress_postfix(pbar)
+
+    def _refresh_progress_postfix(self, pbar):
+        samples = (self.step + self.resume_step + 1) * self.global_batch
+        pbar.set_postfix({"samples": samples}, refresh=False)
+
+    @contextmanager
+    def _redirect_logger_to_tqdm(self, pbar):
+        current_logger = logger.get_current()
+        output_formats = getattr(current_logger, "output_formats", [])
+        human_formats = [
+            fmt for fmt in output_formats if isinstance(fmt, logger.HumanOutputFormat)
+        ]
+        if not human_formats:
+            yield
+            return
+
+        redirect_stream = _TqdmLoggerStream(pbar)
+        original_files = {fmt: fmt.file for fmt in human_formats}
+        try:
+            for fmt in human_formats:
+                fmt.file = redirect_stream
+            yield
+        finally:
+            for fmt, original in original_files.items():
+                fmt.file = original
 
     def save(self):
         def save_checkpoint(rate, params):
@@ -299,3 +362,35 @@ def log_loss_dict(diffusion, ts, losses):
         for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
             quartile = int(4 * sub_t / diffusion.num_timesteps)
             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
+
+
+class _TqdmWithRedirect:
+    def __init__(self, loop, pbar):
+        self.loop = loop
+        self.pbar = pbar
+        self._redirect_ctx = None
+
+    def __enter__(self):
+        self._redirect_ctx = self.loop._redirect_logger_to_tqdm(self.pbar)
+        self._redirect_ctx.__enter__()
+        return self.pbar
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._redirect_ctx is not None:
+            self._redirect_ctx.__exit__(exc_type, exc_val, exc_tb)
+        self.pbar.close()
+
+
+class _TqdmLoggerStream:
+    def __init__(self, pbar):
+        self.pbar = pbar
+
+    def write(self, data):
+        data = data.rstrip("\n")
+        if data:
+            tqdm.write(data, file=getattr(self.pbar, "fp", None))
+
+    def flush(self):
+        fp = getattr(self.pbar, "fp", None)
+        if fp:
+            fp.flush()
