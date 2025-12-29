@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 
@@ -38,7 +39,10 @@ from utils.timer import Timer
 
 def prepare_model(algorithm, conf, device):
     logging_info("Prepare model...")
-    unet = create_model(**select_args(conf, model_defaults().keys()))
+    create_model_kwargs = select_args(
+        conf, inspect.signature(create_model).parameters.keys()
+    )
+    unet = create_model(**create_model_kwargs)
     SAMPLER_CLS = {
         "repaint": SpacedDiffusion,
         "ddim": DDIMSampler,
