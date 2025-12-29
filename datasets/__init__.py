@@ -1,6 +1,6 @@
 from .celebahq import load_celebahq, load_lama_celebahq
 from .imagenet import load_imagenet
-from .seismic import load_seismic
+from .seismic import load_seismic, load_seismic_from_mat
 
 
 REFERENCE_DIRS = {

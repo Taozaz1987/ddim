@@ -154,9 +154,10 @@ class Config(NestedDict):
                         default=None,
                     )
                 elif type(value_param) is list:
+                    elem_type = type(value_param[0]) if len(value_param) > 0 else str
                     parser.add_argument(
                         "--%s" % name_param,
-                        type=type(value_param[0]),
+                        type=elem_type,
                         # default=value_param,
                         nargs="+",
                         default=None,

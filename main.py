@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 from PIL import Image
 
-from datasets import load_lama_celebahq, load_imagenet, load_seismic
+from datasets import load_lama_celebahq, load_imagenet, load_seismic, load_seismic_from_mat
 from datasets.utils import normalize
 from guided_diffusion import (
     DDIMSampler,
@@ -94,6 +94,11 @@ def prepare_data(
     dataset_starting_index=-1,
     dataset_ending_index=-1,
     image_size=None,
+    data_path=None,
+    mask_params=None,
+    mat_path=None,
+    mat_key=None,
+    mat_stride=None,
 ):
     shape = (image_size, image_size) if image_size is not None else None
     if dataset_name == "celebahq":
@@ -107,7 +112,23 @@ def prepare_data(
     elif dataset_name == "imagenet512":
         datas = load_imagenet(mask_type=mask_type, shape=(512, 512))
     elif dataset_name == "seismic":
-        datas = load_seismic(mask_type=mask_type, shape=shape)
+        if mat_path:
+            datas = load_seismic_from_mat(
+                mat_path=mat_path,
+                mat_key=mat_key or "input",
+                mask_type=mask_type,
+                mask_params=mask_params,
+                patch_size=image_size,
+                stride=mat_stride,
+            )
+        else:
+            datas = load_seismic(
+                data_path=data_path or "qiepian/marmousi_patches.npy",
+                mask_type=mask_type,
+                shape=shape,
+                mask_params=mask_params,
+                include_unmasked=True,
+            )
     else:
         raise NotImplementedError
 
@@ -134,7 +155,19 @@ def main():
     ###################################################################################
     # prepare config, logger and recorder
     ###################################################################################
-    config = Config(default_config_file="configs/celebahq.yaml", use_argparse=True)
+    base_defaults = {
+        "data_path": "qiepian/marmousi_patches.npy",
+        "mask_drop_rate": 0.5,
+        "mask_drop_indices": [],
+        "mat_path": "",
+        "mat_key": "input",
+        "mat_stride": 64,
+    }
+    config = Config(
+        default_config_file="configs/celebahq.yaml",
+        default_config_dict=base_defaults,
+        use_argparse=True,
+    )
     if not hasattr(config, "in_channels"):
         config["in_channels"] = model_defaults()["in_channels"]
         config.in_channels = config["in_channels"]
@@ -156,6 +189,14 @@ def main():
     ###################################################################################
     # prepare data
     ###################################################################################
+    mask_params = {}
+    if hasattr(config, "mask_drop_rate") and config.mask_drop_rate is not None:
+        mask_params["drop_rate"] = config.mask_drop_rate
+    if hasattr(config, "mask_drop_indices") and config.mask_drop_indices not in (None, []):
+        mask_params["drop_indices"] = [int(i) for i in config.mask_drop_indices]
+    if len(mask_params) == 0:
+        mask_params = None
+
     if config.input_image == "":  # if input image is not given, load dataset
         datas = prepare_data(
             config.dataset_name,
@@ -163,6 +204,11 @@ def main():
             config.dataset_starting_index,
             config.dataset_ending_index,
             config.image_size,
+            data_path=config.data_path if hasattr(config, "data_path") else None,
+            mask_params=mask_params,
+            mat_path=config.mat_path if getattr(config, "mat_path", "") else None,
+            mat_key=getattr(config, "mat_key", None),
+            mat_stride=getattr(config, "mat_stride", None),
         )
     else:
         # NOTE: the model should accepet this input image size
@@ -219,10 +265,12 @@ def main():
 
     for data in tqdm(datas):
         if config.class_cond:
-            image, mask, image_name, class_id = data
+            image, mask, image_name, class_id = data[:4]
+            extra_items = data[4:]
         else:
-            image, mask, image_name = data
+            image, mask, image_name, *extra_items = data
             class_id = None
+        original_image = extra_items[0] if len(extra_items) > 0 else image
         # prepare save dir
         outpath = os.path.join(config.outdir, image_name)
         os.makedirs(outpath, exist_ok=True)
@@ -232,7 +280,7 @@ def main():
         grid_count = max(len(os.listdir(outpath)) - 3, 0)
 
         # prepare batch data for processing
-        batch_image = image.to(device)
+        batch_image = original_image.to(device)
         batch_mask = mask.to(device)
         if batch_mask.dim() < 4:
             batch_mask = torch.ones(
@@ -250,9 +298,17 @@ def main():
             batch_mask = batch_mask.unsqueeze(0)
         if batch_mask.shape[1] != config.in_channels:
             batch_mask = batch_mask.repeat(1, config.in_channels, 1, 1)
-        batch = {"image": batch_image, "mask": batch_mask}
+        batch_image_masked = batch_image * batch_mask
+        model_gt = (
+            batch_image_masked if config.dataset_name == "seismic" else batch_image
+        )
+        batch = {
+            "image": batch_image,
+            "mask": batch_mask,
+            "masked_image": batch_image_masked,
+        }
         model_kwargs = {
-            "gt": batch["image"].repeat(batch_size, 1, 1, 1),
+            "gt": model_gt.repeat(batch_size, 1, 1, 1),
             "gt_keep_mask": batch["mask"].repeat(batch_size, 1, 1, 1),
         }
         if config.class_cond:
@@ -314,7 +370,7 @@ def main():
             # save gt images
             save_grid(normalize_image(batch["image"]), os.path.join(outpath, f"gt.png"))
             save_grid(
-                normalize_image(batch["image"] * batch["mask"]),
+                normalize_image(batch["masked_image"]),
                 os.path.join(outpath, f"masked.png"),
             )
             # save generations

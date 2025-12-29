@@ -30,7 +30,8 @@ class SeismicPatchDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, dict]:
-        image, _, _ = self.samples[idx]
+        sample = self.samples[idx]
+        image = sample[-1] if len(sample) > 3 else sample[0]
         if image.ndim == 4 and image.shape[0] == 1:
             image = image[0]
         return image, {}
